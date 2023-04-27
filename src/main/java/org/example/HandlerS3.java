@@ -12,12 +12,10 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectResponse;
-import software.amazon.awssdk.services.s3.model.S3Exception;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.HashMap;
-import java.util.Map;
 
 public class HandlerS3 implements RequestHandler<S3Event, String> {
 
@@ -26,6 +24,11 @@ public class HandlerS3 implements RequestHandler<S3Event, String> {
         LambdaLogger logger = context.getLogger();
         logger.log("HandlerS3::handleRequest START ______________________________");
         S3EventNotification.S3EventNotificationRecord record = event.getRecords().get(0);
+        if (record == null) {
+            logger.log("Record not found in event. Exiting.");
+            return null;
+        }
+
         String srcBucket = record.getS3().getBucket().getName();
         String srcKey = record.getS3().getObject().getUrlDecodedKey();
 
@@ -35,10 +38,11 @@ public class HandlerS3 implements RequestHandler<S3Event, String> {
         logger.log("BUCKET: " + srcBucket);
         logger.log("KEY: " + srcKey);
 
-        logger.log("Get PDF from S3");
+        logger.log("1. Get PDF from S3");
         S3Client s3Client = S3Client.builder().build();
         InputStream inputStream = getObject(s3Client, srcBucket, srcKey);
 
+        logger.log("2. Convert PDF to text");
         String text;
         try {
             text = new PDFTextStripper().getText(PDDocument.load(inputStream));
@@ -48,7 +52,7 @@ public class HandlerS3 implements RequestHandler<S3Event, String> {
             throw new RuntimeException(e);
         }
 
-        logger.log("Save new file with extracted text");
+        logger.log("3. Save converted text file on S3");
         String dstBucket = srcBucket;
         String dstKey = "output/converted-" + srcKey + ".txt";
         PutObjectResponse putObjectResponse = putS3Object(s3Client, dstBucket, dstKey, text);
@@ -67,20 +71,13 @@ public class HandlerS3 implements RequestHandler<S3Event, String> {
     }
 
     public static PutObjectResponse putS3Object(S3Client s3, String bucketName, String objectKey, String text) {
+        PutObjectRequest putOb = PutObjectRequest.builder()
+                .bucket(bucketName)
+                .key(objectKey)
+                .metadata(new HashMap<>())
+                .build();
 
-        try {
-            PutObjectRequest putOb = PutObjectRequest.builder()
-                    .bucket(bucketName)
-                    .key(objectKey)
-                    .metadata(new HashMap<>())
-                    .build();
-
-            PutObjectResponse response = s3.putObject(putOb, RequestBody.fromString(text));
-            return response;
-        } catch (S3Exception e) {
-            System.err.println(e.getMessage());
-            System.exit(1);
-        }
-        return null;
+        PutObjectResponse response = s3.putObject(putOb, RequestBody.fromString(text));
+        return response;
     }
 }
